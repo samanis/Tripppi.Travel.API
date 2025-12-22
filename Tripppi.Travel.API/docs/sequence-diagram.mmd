@@ -1,0 +1,63 @@
+sequenceDiagram
+    Note over User,ReactApp: 1) User opens site, sees search UI
+    User->>CloudFront: GET /
+    CloudFront->>ReactApp: Serve SPA assets
+
+    Note over ReactApp,API: 2) Flight search flow
+    ReactApp->>CloudFront: POST /api/search
+    CloudFront->>API: Forward request
+    API->>Cache: Lookup cached results (search key)
+    alt cache hit
+        Cache-->>API: cached results
+    else cache miss
+        API->>DuffelProxy(IFlightsInfo): Search / Request offers
+        DuffelProxy(IFlightsInfo)-->>API: Offer list
+        API->>Cache: Store search results (TTL)
+    end
+    API-->>ReactApp: Offer list (offer_id, price, expires_at, summary)
+
+    Note over ReactApp,API: 3) Offer selection & repricing
+    ReactApp->>CloudFront: POST /api/offers/{offer_id}/reprice
+    CloudFront->>API: Reprice request (idempotency-key)
+    API->>DuffelProxy(IFlightsInfo): Reprice / lock offer (include idempotency)
+    DuffelProxy(IFlightsInfo)-->>API: Repriced/locked offer
+
+    Note over ReactApp,API: 4) Passenger data collection (minimal PII)
+    ReactApp->>CloudFront: POST /api/orders (passengers, contact, local idempotency-key)
+    CloudFront->>API: Create order request
+    API->>DB: Create local Order record (store DuffelProxy(IFlightsInfo) refs, encrypted/transient PII, idempotency)
+    API->>DuffelProxy(IFlightsInfo): Create Order + Payment (use idempotency)
+    DuffelProxy(IFlightsInfo)-->>API: order_id, payment_status, payment_url (or payment handled server-side)
+
+    alt Hosted payment flow
+        API-->>ReactApp: payment_url
+        ReactApp->>DuffelProxy(IFlightsInfo): User completes hosted payment
+        DuffelProxy(IFlightsInfo)-->>Webhook: payment.succeeded (async)
+    else Server-side capture / tokenized via DuffelProxy(IFlightsInfo)
+        DuffelProxy(IFlightsInfo)-->>API: immediate payment success response
+        API->>DB: Update order status = Confirmed, store pnr if present
+        API-->>ReactApp: Order confirmed response
+    end
+
+    Note over Webhook,Worker: 5) Webhook processing (always verify & idempotent)
+    Webhook->>CloudFront: POST /api/webhooks/DuffelProxy(IFlightsInfo) (signed payload)
+    CloudFront->>API: Deliver webhook
+    API->>Worker: Enqueue webhook event
+    Worker->>Worker: Verify signature, check idempotency store
+    alt valid & not processed
+        Worker->>DuffelProxy(IFlightsInfo): (optional) fetch order for reconciliation
+        DuffelProxy(IFlightsInfo)-->>Worker: order details (pnr, payment_status)
+        Worker->>DB: Update Order (status=Confirmed, payment=Paid, store PNR)
+        Worker->>Email: Enqueue confirmation email (magic-link for guest access)
+        Worker->>DB: Persist audit/event (no raw PII in logs)
+    else invalid or replay
+        Worker->>DB: Persist webhook error / ignore
+    end
+
+    Note over Email,User: 6) Finalize UX
+    Email-->>User: Send confirmation + magic-link
+    ReactApp->>CloudFront: GET /api/orders/{localId} (with magic-link token)
+    CloudFront->>API: Validate token, return order summary (non-sensitive)
+    API-->>ReactApp: Booking confirmation + itinerary + support code
+
+    Note over DB,API: Data retained only as allowed (offer_id, order_id, PNR, minimal contact).
