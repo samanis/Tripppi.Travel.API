@@ -6,7 +6,7 @@ using Tripppi.Travel.API.Services;
 
 namespace Tripppi.Travel.API
 {
-    public class Program
+    public partial class Program
     {
         public static void Main(string[] args)
         {
@@ -37,6 +37,31 @@ namespace Tripppi.Travel.API
             // TEMPORARILY DISABLED to test if hosted service is causing crash
             // builder.Services.AddHostedService<AirportCachePreloader>();
 
+            // CORS: Allow only client app origin (configured per environment)
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("AllowClientApp", policy =>
+                {
+                    var allowedOrigin = builder.Configuration["Security:AllowedOrigin"];
+                    
+                    if (string.IsNullOrWhiteSpace(allowedOrigin))
+                    {
+                        // Development: allow all origins (for testing only)
+                        policy.AllowAnyOrigin()
+                              .AllowAnyMethod()
+                              .AllowAnyHeader();
+                    }
+                    else
+                    {
+                        // Production: strict origin check
+                        policy.WithOrigins(allowedOrigin)
+                              .AllowAnyMethod()
+                              .AllowAnyHeader()
+                              .AllowCredentials();
+                    }
+                });
+            });
+
             builder.Services.AddControllers();
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
@@ -46,6 +71,12 @@ namespace Tripppi.Travel.API
 
             // Global exception handler - temporarily disabled for debugging
             // app.UseMiddleware<Tripppi.Travel.API.Middleware.GlobalExceptionHandlerMiddleware>();
+
+            // Origin secret validation: block requests not from CloudFront
+            app.UseMiddleware<Tripppi.Travel.API.Middleware.OriginSecretValidationMiddleware>();
+
+            // CORS: only allow configured client app origin
+            app.UseCors("AllowClientApp");
 
             // Configure the HTTP request pipeline.
             if (app.Environment.IsDevelopment())

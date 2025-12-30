@@ -131,22 +131,31 @@ namespace Tripppi.Travel.API.Repositories
                 airport.CountryName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase))
                 textScore += 400;
 
-            // Airport name contains query
-            if (!string.IsNullOrEmpty(airport.AirportName) && 
-                airport.AirportName.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
-                textScore += 300;
+            // Only use "contains" matching for longer queries (5+ characters)
+            // This prevents popular airports from appearing in short queries where they're not relevant
+            if (queryLower.Length >= 5)
+            {
+                // Airport name contains query (much lower weight to favor exact/prefix matches)
+                if (!string.IsNullOrEmpty(airport.AirportName) && 
+                    airport.AirportName.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
+                    textScore += 50;
 
-            // City name contains query
-            if (!string.IsNullOrEmpty(airport.CityName) && 
-                airport.CityName.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
-                textScore += 200;
+                // City name contains query (much lower weight)
+                if (!string.IsNullOrEmpty(airport.CityName) && 
+                    airport.CityName.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
+                    textScore += 30;
 
-            // Country name contains query
-            if (!string.IsNullOrEmpty(airport.CountryName) && 
-                airport.CountryName.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
-                textScore += 100;
+                // Country name contains query (much lower weight)
+                if (!string.IsNullOrEmpty(airport.CountryName) && 
+                    airport.CountryName.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
+                    textScore += 20;
+            }
 
-            // Combine text match (60%) + popularity (40%)
+            // If no text match at all, return 0 (don't rank on popularity alone)
+            if (textScore == 0)
+                return 0;
+
+            // Combine text match (70%) + popularity (30%) - increased text relevance weight
             // Default popularity to 10 if not set
             var popularityScore = airport.PopularityScore ?? 10;
             
@@ -156,8 +165,8 @@ namespace Tripppi.Travel.API.Repositories
             // Normalize popularity to 0-100 range (max popularity is 1000)
             var normalizedPopularity = Math.Min(popularityScore / 10, 100);
             
-            // Final score: 60% text relevance + 40% popularity
-            var finalScore = (int)((normalizedTextScore * 0.6) + (normalizedPopularity * 0.4));
+            // Final score: 70% text relevance + 30% popularity (favors exact matches more)
+            var finalScore = (int)((normalizedTextScore * 0.7) + (normalizedPopularity * 0.3));
 
             return finalScore;
         }

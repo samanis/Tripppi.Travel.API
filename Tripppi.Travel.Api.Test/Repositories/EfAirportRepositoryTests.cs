@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Tripppi.Travel.API.Domain;
 using Tripppi.Travel.API.Infrastructure;
 using Tripppi.Travel.API.Repositories;
@@ -23,13 +25,15 @@ namespace Tripppi.Travel.Api.Test.Repositories
 
             var memoryCache = new MemoryCache(new MemoryCacheOptions());
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string>
+                .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     { "Cache:AirportsKey", "AirportsCache" }
                 })
                 .Build();
 
-            _repository = new EfAirportRepository(_context, memoryCache, config);
+            var logger = NullLogger<EfAirportRepository>.Instance;
+
+            _repository = new EfAirportRepository(_context, memoryCache, config, logger);
 
             SeedTestData();
         }
@@ -166,12 +170,22 @@ namespace Tripppi.Travel.Api.Test.Repositories
         [Fact]
         public async Task SearchWithScoringAsync_PartialCityName_ReturnsMatches()
         {
-            // Act
+            // Act - "York" is 4 characters, so it only matches "starts with"
             var results = await _repository.SearchWithScoringAsync("York");
 
-            // Assert
+            // Assert - should be empty since no city starts with "York"
+            Assert.Empty(results);
+        }
+
+        [Fact]
+        public async Task SearchWithScoringAsync_LongerQuery_UsesContainsMatching()
+        {
+            // Act - "London" is 6 characters, so "contains" should work
+            var results = await _repository.SearchWithScoringAsync("ondon");
+
+            // Assert - should find London (contains "ondon")
             Assert.NotEmpty(results);
-            Assert.All(results, r => Assert.Contains("New York", r.CityName ?? ""));
+            Assert.Contains(results, r => r.CityName == "London");
         }
 
         [Fact]
@@ -265,24 +279,30 @@ namespace Tripppi.Travel.Api.Test.Repositories
         [Fact]
         public async Task SearchWithScoringAsync_PrefixMatchRanksHigher_ThanContains()
         {
-            // Seed an airport with "York" in the middle
+            // Seed airports to test ranking
             _context.Airports.Add(new Airport
             {
                 AirportIata = "ABC",
-                AirportName = "Some Airport",
-                CityName = "Yorkshire",
+                AirportName = "Paris International Airport",
+                CityName = "Comparison City",
                 CountryName = "United Kingdom",
-                CountryIata = "GB"
+                CountryIata = "GB",
+                PopularityScore = 100
             });
             _context.SaveChanges();
 
-            // Act
-            var results = await _repository.SearchWithScoringAsync("New");
+            // Act - "Paris" is 5 chars, enables "contains" matching
+            var results = await _repository.SearchWithScoringAsync("Paris");
 
             // Assert
             Assert.NotEmpty(results);
-            // "New York" (prefix) should rank higher than "Yorkshire" (contains)
-            Assert.Equal("New York", results[0].CityName);
+            // "Paris" (city name starts with) should rank first
+            Assert.Equal("Paris", results[0].CityName);
+            // "Paris International Airport" (airport name contains) should rank lower
+            if (results.Count > 1)
+            {
+                Assert.NotEqual("ABC", results[0].AirportIata);
+            }
         }
 
         [Fact]
