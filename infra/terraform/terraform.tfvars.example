@@ -1,0 +1,30 @@
+# Terraform variable values for production environment
+# Copy this file to terraform.tfvars and fill in your values
+# DO NOT commit terraform.tfvars to version control!
+
+aws_region = "us-east-1"
+environment = "production"
+project_name = "airpath"
+
+# VPC Configuration
+vpc_cidr = "10.0.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b"]
+
+# RDS Configuration
+db_instance_class = "db.t4g.micro"
+db_name = "airpath"
+db_username = "admin"
+db_password = "CHANGE_ME_STRONG_PASSWORD" # TODO: Use a strong password
+db_multi_az = false # Set to true for production
+
+# ECS Configuration
+ecs_task_cpu = "512"
+ecs_task_memory = "1024"
+ecs_desired_count = 2
+
+# Container image - will be set after first push to ECR
+container_image = ""
+
+# Application Configuration
+allowed_origin = "https://airpath.travel"
+origin_secret = "CHANGE_ME_RANDOM_SECRET" # TODO: Generate a random secret

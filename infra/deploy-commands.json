@@ -1,0 +1,12 @@
+{
+  "commands": [
+    "docker stop $(docker ps -q) 2>/dev/null || true",
+    "docker rm $(docker ps -aq) 2>/dev/null || true",
+    "aws ecr get-login-password --region ca-central-1 | docker login --username AWS --password-stdin 245991315884.dkr.ecr.ca-central-1.amazonaws.com",
+    "docker pull 245991315884.dkr.ecr.ca-central-1.amazonaws.com/airpath-api:latest",
+    "docker run -d --name airpath-api --restart unless-stopped -p 8080:8080 -e ASPNETCORE_ENVIRONMENT=Production -e ASPNETCORE_HTTP_PORTS=8080 -e 'DB_CONNECTION_STRING=Host=10.0.1.41;Port=5432;Database=airpath;Username=airpathdb;Password=DqYsG0aRTg25pxo3IcBj;SSL Mode=Require;Trust Server Certificate=true' 245991315884.dkr.ecr.ca-central-1.amazonaws.com/airpath-api:latest",
+    "sleep 5",
+    "docker ps",
+    "curl -s http://localhost:8080/api/health"
+  ]
+}
