@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Tripppi.Travel.API;
 using Tripppi.Travel.API.Domain;
 using Tripppi.Travel.API.Infrastructure;
@@ -17,18 +18,33 @@ namespace Tripppi.Travel.Api.Test.Integration
         {
             builder.ConfigureServices(services =>
             {
-                // Remove the existing Postgres DbContext registration
-                var descriptor = services.SingleOrDefault(
+                // Remove ALL DbContext-related registrations
+                var dbContextDescriptor = services.SingleOrDefault(
                     d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
-                if (descriptor != null)
-                    services.Remove(descriptor);
+                if (dbContextDescriptor != null)
+                    services.Remove(dbContextDescriptor);
+
+                var dbContextOptionsDescriptor = services.SingleOrDefault(
+                    d => d.ServiceType == typeof(DbContextOptions));
+                if (dbContextOptionsDescriptor != null)
+                    services.Remove(dbContextOptionsDescriptor);
+
+                // Remove AppDbContext registration itself
+                var appDbContextDescriptor = services.SingleOrDefault(
+                    d => d.ServiceType == typeof(AppDbContext));
+                if (appDbContextDescriptor != null)
+                    services.Remove(appDbContextDescriptor);
 
                 // Add in-memory database for testing
                 services.AddDbContext<AppDbContext>(options =>
                 {
                     options.UseInMemoryDatabase("TestDatabase");
                 });
+            });
 
+            // Configure test data seeding separately
+            builder.ConfigureServices(services =>
+            {
                 // Build service provider and seed test data
                 var sp = services.BuildServiceProvider();
                 using var scope = sp.CreateScope();
@@ -43,6 +59,13 @@ namespace Tripppi.Travel.Api.Test.Integration
 
         private static void SeedTestData(AppDbContext context)
         {
+            // Clear existing data
+            if (context.Airports.Any())
+            {
+                context.Airports.RemoveRange(context.Airports);
+                context.SaveChanges();
+            }
+
             var airports = new[]
             {
                 new Airport

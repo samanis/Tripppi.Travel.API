@@ -1,0 +1,5 @@
+[33m7742735[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32minitial[m[33m, [m[1;31morigin/initial[m[33m)[m feat: add vendor-neutral flight search abstraction with Leg terminology
+[33m9dcbf14[m docs
+[33m60b2aba[m chore: remove Terraform cache and update gitignore
+[33m661f5f7[m the airport search works
+[33mc34055e[m working search
