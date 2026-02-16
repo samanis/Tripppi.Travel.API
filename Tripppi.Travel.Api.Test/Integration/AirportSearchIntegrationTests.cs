@@ -16,57 +16,51 @@ namespace Tripppi.Travel.Api.Test.Integration
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            // Set environment to Testing to help Program.cs skip certain registrations
+            builder.UseEnvironment("Testing");
+            
             builder.ConfigureServices(services =>
             {
-                // Remove ALL DbContext-related registrations
-                var dbContextDescriptor = services.SingleOrDefault(
+                // Remove the PostgreSQL DbContext registration
+                var descriptor = services.FirstOrDefault(
                     d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
-                if (dbContextDescriptor != null)
-                    services.Remove(dbContextDescriptor);
+                
+                if (descriptor != null)
+                {
+                    services.Remove(descriptor);
+                }
 
-                var dbContextOptionsDescriptor = services.SingleOrDefault(
-                    d => d.ServiceType == typeof(DbContextOptions));
-                if (dbContextOptionsDescriptor != null)
-                    services.Remove(dbContextOptionsDescriptor);
-
-                // Remove AppDbContext registration itself
-                var appDbContextDescriptor = services.SingleOrDefault(
-                    d => d.ServiceType == typeof(AppDbContext));
-                if (appDbContextDescriptor != null)
-                    services.Remove(appDbContextDescriptor);
-
-                // Add in-memory database for testing
+                // Add InMemory database for testing
                 services.AddDbContext<AppDbContext>(options =>
                 {
                     options.UseInMemoryDatabase("TestDatabase");
                 });
-            });
 
-            // Configure test data seeding separately
-            builder.ConfigureServices(services =>
-            {
-                // Build service provider and seed test data
+                // Build a temporary service provider to seed the database
                 var sp = services.BuildServiceProvider();
+                
                 using var scope = sp.CreateScope();
                 var scopedServices = scope.ServiceProvider;
                 var db = scopedServices.GetRequiredService<AppDbContext>();
-                
-                // Ensure database is created and seed test data
+
+                // Ensure the database is created
                 db.Database.EnsureCreated();
+                
+                // Seed test data
                 SeedTestData(db);
             });
         }
 
         private static void SeedTestData(AppDbContext context)
         {
-            // Clear existing data
+            // Clear existing data if any
             if (context.Airports.Any())
             {
                 context.Airports.RemoveRange(context.Airports);
                 context.SaveChanges();
             }
 
-            var airports = new[]
+            var airports = new []
             {
                 new Airport
                 {
