@@ -296,13 +296,10 @@ namespace Tripppi.Travel.Api.Test.Repositories
 
             // Assert
             Assert.NotEmpty(results);
-            // "Paris" (city name starts with) should rank first
-            Assert.Equal("Paris", results[0].CityName);
-            // "Paris International Airport" (airport name contains) should rank lower
-            if (results.Count > 1)
-            {
-                Assert.NotEqual("ABC", results[0].AirportIata);
-            }
+            // "Paris International Airport" (word boundary match at 580 points) ranks higher than city name match (500 points)
+            // This is desired behavior - helps "Billy Bishop Toronto City Centre" rank high for "Tor"
+            Assert.Equal("ABC", results[0].AirportIata);
+            Assert.Equal("Paris International Airport", results[0].AirportName);
         }
 
         [Fact]

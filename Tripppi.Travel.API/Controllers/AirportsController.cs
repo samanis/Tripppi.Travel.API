@@ -22,12 +22,20 @@ namespace Tripppi.Travel.API.Controllers
 
         /// <summary>
         /// Search airports by prefix (matches airport name, IATA, city, country).
-        /// Returns results ranked by text relevance (60%) and popularity (40%).
+        /// Returns results ranked by text relevance (70%) and popularity (30%).
         /// </summary>
         /// <param name="q">Search query (e.g., "tor", "YYZ", "London", "char")</param>
         /// <param name="cancellationToken">Cancellation token</param>
         /// <returns>Top 5 matching airports ranked by combined score</returns>
+        /// <response code="200">Returns matching airports</response>
+        /// <response code="400">Invalid query parameter</response>
+        /// <response code="404">No airports found matching the query</response>
+        /// <response code="500">Internal server error</response>
         [HttpGet("search")]
+        [ProducesResponseType(typeof(IReadOnlyList<Airport>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(object), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(object), StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(object), StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult<IReadOnlyList<Airport>>> Search(
             [FromQuery] string q,
             CancellationToken cancellationToken)
@@ -39,9 +47,23 @@ namespace Tripppi.Travel.API.Controllers
 
             _logger.LogInformation("Searching airports with query: {Query}", q);
 
-            var airports = await _locationService.SearchAsync(q, cancellationToken);
+            try
+            {
+                var airports = await _locationService.SearchAsync(q, cancellationToken);
 
-            return Ok(airports);
+                if (airports == null || airports.Count == 0)
+                {
+                    _logger.LogInformation("No airports found for query: {Query}", q);
+                    return NotFound(new { error = $"No airports found matching '{q}'" });
+                }
+
+                return Ok(airports);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error searching airports with query: {Query}", q);
+                throw; // Let GlobalExceptionHandlerMiddleware handle it
+            }
         }
     }
 }

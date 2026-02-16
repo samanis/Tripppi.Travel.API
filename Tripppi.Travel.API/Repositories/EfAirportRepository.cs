@@ -106,20 +106,29 @@ namespace Tripppi.Travel.API.Repositories
                 airport.AirportIata.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase))
                 textScore += 800;
 
+            // City name starts with query (high priority for major hubs like Paris, Toronto, London)
+            if (!string.IsNullOrEmpty(airport.CityName) && 
+                airport.CityName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase))
+                textScore += 650;
+
             // Airport name starts with query
             if (!string.IsNullOrEmpty(airport.AirportName) && 
                 airport.AirportName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase))
                 textScore += 600;
 
+            // Airport name contains query at word boundary (e.g., "Toronto" in "Billy Bishop Toronto City Centre")
+            // This helps airports like Billy Bishop rank higher for "tor" searches
+            if (!string.IsNullOrEmpty(airport.AirportName) && queryLower.Length >= 3)
+            {
+                var words = airport.AirportName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (words.Any(w => w.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase)))
+                    textScore += 580; // Just below full name prefix (600), above city IATA (550)
+            }
+
             // City IATA starts with query
             if (!string.IsNullOrEmpty(airport.CityIataCode) && 
                 airport.CityIataCode.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase))
                 textScore += 550;
-
-            // City name starts with query
-            if (!string.IsNullOrEmpty(airport.CityName) && 
-                airport.CityName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase))
-                textScore += 500;
 
             // Country IATA starts with query
             if (!string.IsNullOrEmpty(airport.CountryIata) && 

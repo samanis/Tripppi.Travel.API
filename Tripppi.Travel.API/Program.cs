@@ -3,6 +3,9 @@ using Microsoft.EntityFrameworkCore;
 using Tripppi.Travel.API.Infrastructure;
 using Tripppi.Travel.API.Repositories;
 using Tripppi.Travel.API.Services;
+using Tripppi.Travel.API.Logging;
+using AWS.Logger;
+using AWS.Logger.AspNetCore;
 
 namespace Tripppi.Travel.API
 {
@@ -14,10 +17,49 @@ namespace Tripppi.Travel.API
             {
                 var builder = WebApplication.CreateBuilder(args);
 
-            // Configure logging to show all errors
+            // AWS Configuration: Load secrets from environment variables (populated by ECS from Secrets Manager)
+            if (builder.Environment.IsProduction())
+            {
+                // Override connection string from environment variable
+                var dbConnectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
+                if (!string.IsNullOrEmpty(dbConnectionString))
+                {
+                    builder.Configuration["ConnectionStrings:DefaultConnection"] = dbConnectionString;
+                }
+
+                // Override origin secret from environment variable
+                var originSecret = Environment.GetEnvironmentVariable("ORIGIN_SECRET");
+                if (!string.IsNullOrEmpty(originSecret))
+                {
+                    builder.Configuration["Security:OriginSecret"] = originSecret;
+                }
+            }
+
+            // Configure logging: Console for dev, AWS CloudWatch for production
             builder.Logging.ClearProviders();
-            builder.Logging.AddConsole();
-            builder.Logging.SetMinimumLevel(LogLevel.Debug);
+            
+            if (builder.Environment.IsProduction())
+            {
+                // IMPORTANT: AWS Logger in containers requires console logging for now
+                // CloudWatch integration via AWS Logger has credential discovery issues in Docker containers
+                // even with host networking and proper IAM roles.
+                // 
+                // For CloudWatch logs in production, use one of these alternatives:
+                // 1. AWS CloudWatch Agent on the host collecting Docker logs
+                // 2. Fluent Bit sidecar container
+                // 3. AWS ECS with awslogs driver (for ECS deployments)
+                //
+                // For now: console logs + CloudWatch Agent or external log shipping
+                builder.Logging.AddConsole();
+                builder.Logging.SetMinimumLevel(LogLevel.Information);
+                Console.WriteLine("ℹ️  Production logging: Console output (for Docker log collection)");
+            }
+            else
+            {
+                // Development: console logging with debug level
+                builder.Logging.AddConsole();
+                builder.Logging.SetMinimumLevel(LogLevel.Debug);
+            }
 
             // Configure PostgreSQL with Npgsql
             builder.Services.AddDbContext<AppDbContext>(options =>
@@ -29,36 +71,29 @@ namespace Tripppi.Travel.API
             // Register application services
             builder.Services.AddScoped<ILocationService, LocationService>();
 
+            // Register logging abstraction (platform-agnostic wrapper)
+            builder.Services.AddSingleton(typeof(IAppLogger<>), typeof(AppLogger<>));
+
             // In-memory cache for startup-loaded airport data
             builder.Services.AddMemoryCache();
 
             // configure cache options and register preloader
             builder.Services.Configure<AirportCacheOptions>(builder.Configuration.GetSection("Cache"));
-            // TEMPORARILY DISABLED to test if hosted service is causing crash
-            // builder.Services.AddHostedService<AirportCachePreloader>();
+            
+            // Enable cache preloader in production (disabled in dev for faster startup)
+            if (builder.Environment.IsProduction())
+            {
+                builder.Services.AddHostedService<AirportCachePreloader>();
+            }
 
-            // CORS: Allow only client app origin (configured per environment)
+            // CORS: Required by Figma - Allow all origins
             builder.Services.AddCors(options =>
             {
                 options.AddPolicy("AllowClientApp", policy =>
                 {
-                    var allowedOrigin = builder.Configuration["Security:AllowedOrigin"];
-                    
-                    if (string.IsNullOrWhiteSpace(allowedOrigin))
-                    {
-                        // Development: allow all origins (for testing only)
-                        policy.AllowAnyOrigin()
-                              .AllowAnyMethod()
-                              .AllowAnyHeader();
-                    }
-                    else
-                    {
-                        // Production: strict origin check
-                        policy.WithOrigins(allowedOrigin)
-                              .AllowAnyMethod()
-                              .AllowAnyHeader()
-                              .AllowCredentials();
-                    }
+                    policy.AllowAnyOrigin()
+                          .AllowAnyMethod()
+                          .AllowAnyHeader();
                 });
             });
 
@@ -69,14 +104,11 @@ namespace Tripppi.Travel.API
 
             var app = builder.Build();
 
-            // Global exception handler - temporarily disabled for debugging
-            // app.UseMiddleware<Tripppi.Travel.API.Middleware.GlobalExceptionHandlerMiddleware>();
+            // Global exception handler
+            app.UseMiddleware<Tripppi.Travel.API.Middleware.GlobalExceptionHandlerMiddleware>();
 
-            // Origin secret validation: block requests not from CloudFront
-            app.UseMiddleware<Tripppi.Travel.API.Middleware.OriginSecretValidationMiddleware>();
-
-            // CORS: only allow configured client app origin
-            app.UseCors("AllowClientApp");
+            // Request/response logging (logs all incoming requests and responses)
+            app.UseMiddleware<Tripppi.Travel.API.Middleware.RequestResponseLoggingMiddleware>();
 
             // Configure the HTTP request pipeline.
             if (app.Environment.IsDevelopment())
@@ -91,6 +123,10 @@ namespace Tripppi.Travel.API
                 app.UseHttpsRedirection();
             }
 
+            // CORS MUST be before UseAuthorization and routing
+            // Required by Figma: Access-Control-Allow-Origin: *, Methods: GET/OPTIONS, Headers: Accept/Content-Type
+            app.UseCors("AllowClientApp");
+            
             app.UseAuthorization();
 
             // Minimal test endpoint with zero dependencies
