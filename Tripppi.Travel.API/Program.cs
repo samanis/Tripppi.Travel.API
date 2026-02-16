@@ -1,4 +1,3 @@
-
 using Microsoft.EntityFrameworkCore;
 using Tripppi.Travel.API.Infrastructure;
 using Tripppi.Travel.API.Repositories;
@@ -70,6 +69,9 @@ namespace Tripppi.Travel.API
 
             // Register application services
             builder.Services.AddScoped<ILocationService, LocationService>();
+            
+            // Register flight search abstraction with Duffel implementation
+            builder.Services.AddScoped<IFlightSearch, DuffelFlightSearch>();
 
             // Register logging abstraction (platform-agnostic wrapper)
             builder.Services.AddSingleton(typeof(IAppLogger<>), typeof(AppLogger<>));
