@@ -21,20 +21,29 @@ namespace Tripppi.Travel.Api.Test.Integration
             
             builder.ConfigureServices(services =>
             {
-                // Remove the PostgreSQL DbContext registration
-                var descriptor = services.FirstOrDefault(
+                // Remove all DbContext-related services
+                var dbContextDescriptor = services.SingleOrDefault(
                     d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
                 
-                if (descriptor != null)
+                if (dbContextDescriptor != null)
                 {
-                    services.Remove(descriptor);
+                    services.Remove(dbContextDescriptor);
+                }
+
+                // Remove DbContext registration itself
+                var contextDescriptor = services.SingleOrDefault(
+                    d => d.ServiceType == typeof(AppDbContext));
+                
+                if (contextDescriptor != null)
+                {
+                    services.Remove(contextDescriptor);
                 }
 
                 // Add InMemory database for testing
                 services.AddDbContext<AppDbContext>(options =>
                 {
                     options.UseInMemoryDatabase("TestDatabase");
-                });
+                }, ServiceLifetime.Scoped);
 
                 // Build a temporary service provider to seed the database
                 var sp = services.BuildServiceProvider();

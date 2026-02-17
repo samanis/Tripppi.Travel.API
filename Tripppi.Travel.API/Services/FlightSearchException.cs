@@ -1,58 +1,24 @@
-namespace Tripppi.Travel.API.Services
+namespace Tripppi.Travel.API.Services;
+
+/// <summary>
+/// Exception thrown when flight search operations fail.
+/// </summary>
+public sealed class FlightSearchException : Exception
 {
-    /// <summary>
-    /// Exception thrown when flight search operations fail.
-    /// Provides structured error information for logging and user feedback.
-    /// </summary>
-    public class FlightSearchException : Exception
+    public string ErrorCode { get; }
+    public int? StatusCode { get; }
+    public bool IsRetryable { get; }
+
+    public FlightSearchException(
+        string message, 
+        Exception? innerException = null,
+        string errorCode = "flight_search_error",
+        int? statusCode = null,
+        bool isRetryable = false) 
+        : base(message, innerException)
     {
-        /// <summary>
-        /// Vendor-specific error code (e.g., "rate_limit_exceeded", "airline_error").
-        /// </summary>
-        public string? ErrorCode { get; init; }
-
-        /// <summary>
-        /// HTTP status code from vendor API (if applicable).
-        /// </summary>
-        public int? StatusCode { get; init; }
-
-        /// <summary>
-        /// Whether the operation can be retried (transient error).
-        /// </summary>
-        public bool IsRetryable { get; init; }
-
-        public FlightSearchException(string message) : base(message)
-        {
-        }
-
-        public FlightSearchException(string message, Exception innerException) 
-            : base(message, innerException)
-        {
-        }
-
-        public FlightSearchException(
-            string message, 
-            string? errorCode = null, 
-            int? statusCode = null, 
-            bool isRetryable = false) 
-            : base(message)
-        {
-            ErrorCode = errorCode;
-            StatusCode = statusCode;
-            IsRetryable = isRetryable;
-        }
-
-        public FlightSearchException(
-            string message, 
-            Exception innerException, 
-            string? errorCode = null, 
-            int? statusCode = null, 
-            bool isRetryable = false) 
-            : base(message, innerException)
-        {
-            ErrorCode = errorCode;
-            StatusCode = statusCode;
-            IsRetryable = isRetryable;
-        }
+        ErrorCode = errorCode;
+        StatusCode = statusCode;
+        IsRetryable = isRetryable;
     }
 }

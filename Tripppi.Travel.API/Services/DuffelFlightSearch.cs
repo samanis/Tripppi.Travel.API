@@ -1,4 +1,5 @@
-using System.Text.Json;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 using Tripppi.Travel.API.appService;
 using Tripppi.Travel.API.Services.DTOs;
 
@@ -28,7 +29,7 @@ namespace Tripppi.Travel.API.Services
             ArgumentNullException.ThrowIfNull(request);
 
             _logger.LogInformation(
-                "Searching flights via Duffel: {Origin} ? {Destination}, {LegCount} leg(s), {PassengerCount} passenger(s)",
+                "Searching flights via Duffel: {Origin} → {Destination}, {LegCount} leg(s), {PassengerCount} passenger(s)",
                 request.Legs[0].OriginIataCode,
                 request.Legs[0].DestinationIataCode,
                 request.Legs.Count,
@@ -94,11 +95,7 @@ namespace Tripppi.Travel.API.Services
                 data = new
                 {
                     cabin_class = MapCabinClass(request.CabinClass),
-                    passengers = request.Passengers.Select(p => new
-                    {
-                        type = MapPassengerType(p.Type),
-                        age = p.Age
-                    }).ToArray(),
+                    passengers = request.Passengers.Select(p => MapPassengerForDuffel(p)).ToArray(),
                     // Map our "legs" to Duffel's "slices"
                     slices = request.Legs.Select(leg => new
                     {
@@ -121,6 +118,22 @@ namespace Tripppi.Travel.API.Services
         }
 
         /// <summary>
+        /// Maps a passenger to Duffel format, using either type or age (mutually exclusive).
+        /// Duffel requires one or the other, not both.
+        /// </summary>
+        private static object MapPassengerForDuffel(PassengerRequest passenger)
+        {
+            // If age is provided, use age-based format
+            if (passenger.Age.HasValue)
+            {
+                return new { age = passenger.Age.Value };
+            }
+            
+            // Otherwise, use type-based format
+            return new { type = MapPassengerType(passenger.Type) };
+        }
+
+        /// <summary>
         /// Maps Duffel offer response to vendor-neutral FlightSearchResult list.
         /// </summary>
         private IReadOnlyList<FlightSearchResult> MapToFlightSearchResults(DuffelOfferResponse response)
@@ -128,14 +141,14 @@ namespace Tripppi.Travel.API.Services
             return response.Data.Offers.Select(offer => new FlightSearchResult
             {
                 OfferId = offer.Id,
-                TotalAmount = decimal.Parse(offer.TotalAmount),
+                TotalAmount = ParseDecimal(offer.TotalAmount),
                 Currency = offer.TotalCurrency,
-                BaseAmount = decimal.Parse(offer.BaseAmount ?? "0"),
-                TaxAmount = decimal.Parse(offer.TaxAmount ?? "0"),
-                ExpiresAt = DateTime.Parse(offer.ExpiresAt),
+                BaseAmount = ParseDecimal(offer.BaseAmount),
+                TaxAmount = ParseDecimal(offer.TaxAmount),
+                ExpiresAt = ParseDateTime(offer.ExpiresAt),
                 RequiresInstantPayment = offer.PaymentRequirements?.RequiresInstantPayment ?? false,
                 Legs = MapLegs(offer.Slices),
-                Passengers = MapPassengers(offer.Passengers),
+                Passengers = MapPassengers(offer),
                 Conditions = MapConditions(offer.Conditions),
                 Owner = new AirlineInfo
                 {
@@ -166,38 +179,53 @@ namespace Tripppi.Travel.API.Services
 
         /// <summary>
         /// Maps Duffel segments to vendor-neutral segments.
+        /// Handles null carriers, aircraft, and datetime values gracefully.
         /// </summary>
         private List<FlightSegmentResult> MapSegments(List<DuffelSegment> segments)
         {
             return segments.Select(segment => new FlightSegmentResult
             {
-                OperatingCarrierIataCode = segment.OperatingCarrier.IataCode,
-                OperatingCarrierName = segment.OperatingCarrier.Name,
-                MarketingCarrierIataCode = segment.MarketingCarrier.IataCode,
-                FlightNumber = segment.MarketingCarrierFlightNumber,
+                OperatingCarrierIataCode = segment.OperatingCarrier?.IataCode ?? string.Empty,
+                OperatingCarrierName = segment.OperatingCarrier?.Name ?? string.Empty,
+                MarketingCarrierIataCode = segment.MarketingCarrier?.IataCode ?? string.Empty,
+                FlightNumber = segment.MarketingCarrierFlightNumber ?? string.Empty,
                 AircraftName = segment.Aircraft?.Name,
-                OriginIataCode = segment.Origin.IataCode,
-                OriginTerminal = segment.Origin.Terminal,
-                DestinationIataCode = segment.Destination.IataCode,
-                DestinationTerminal = segment.Destination.Terminal,
-                DepartingAt = DateTime.Parse(segment.DepartingAt),
-                ArrivingAt = DateTime.Parse(segment.ArrivingAt),
+                OriginIataCode = segment.Origin?.IataCode ?? string.Empty,
+                OriginTerminal = segment.OriginTerminal ?? segment.Origin?.Terminal,
+                DestinationIataCode = segment.Destination?.IataCode ?? string.Empty,
+                DestinationTerminal = segment.DestinationTerminal ?? segment.Destination?.Terminal,
+                DepartingAt = ParseDateTime(segment.DepartingAt),
+                ArrivingAt = ParseDateTime(segment.ArrivingAt),
                 Duration = ParseDuration(segment.Duration)
             }).ToList();
         }
 
         /// <summary>
         /// Maps Duffel passengers to vendor-neutral passengers.
+        /// Note: Duffel stores detailed passenger info (baggage, cabin class marketing name) in segments, not at offer level.
+        /// We extract from the first segment's passengers array.
         /// </summary>
-        private List<PassengerResult> MapPassengers(List<DuffelPassenger> passengers)
+        private List<PassengerResult> MapPassengers(DuffelOffer offer)
         {
-            return passengers.Select(p => new PassengerResult
+            // Get passenger details from segments (they have baggage, cabin class marketing name, etc.)
+            var segmentPassengers = offer.Slices
+                .SelectMany(s => s.Segments)
+                .SelectMany(seg => seg.Passengers ?? new List<DuffelSegmentPassenger>())
+                .ToList();
+
+            return offer.Passengers.Select(p =>
             {
-                Type = ParsePassengerType(p.Type),
-                CabinClass = ParseCabinClass(p.CabinClass),
-                CabinClassMarketingName = p.CabinClassMarketingName,
-                FareBasisCode = p.FareBasisCode,
-                Baggages = MapBaggages(p.Baggages)
+                // Find matching segment passenger by ID for detailed info
+                var segmentPassenger = segmentPassengers.FirstOrDefault(sp => sp.PassengerId == p.Id);
+
+                return new PassengerResult
+                {
+                    Type = ParsePassengerType(p.Type),
+                    CabinClass = ParseCabinClass(segmentPassenger?.CabinClass),
+                    CabinClassMarketingName = segmentPassenger?.CabinClassMarketingName,
+                    FareBasisCode = segmentPassenger?.FareBasisCode,
+                    Baggages = MapBaggages(segmentPassenger?.Baggages)
+                };
             }).ToList();
         }
 
@@ -240,9 +268,7 @@ namespace Tripppi.Travel.API.Services
             return new FareConditions
             {
                 ChangeBeforeDepartureAllowed = conditions.ChangeBeforeDeparture?.Allowed ?? false,
-                ChangeBeforeDeparturePenaltyAmount = conditions.ChangeBeforeDeparture?.PenaltyAmount != null
-                    ? decimal.Parse(conditions.ChangeBeforeDeparture.PenaltyAmount)
-                    : null,
+                ChangeBeforeDeparturePenaltyAmount = ParseDecimalNullable(conditions.ChangeBeforeDeparture?.PenaltyAmount),
                 ChangeBeforeDeparturePenaltyCurrency = conditions.ChangeBeforeDeparture?.PenaltyCurrency,
                 RefundBeforeDepartureAllowed = conditions.RefundBeforeDeparture?.Allowed ?? false,
                 ChangeAfterDepartureAllowed = conditions.ChangeAfterDeparture?.Allowed ?? false,
@@ -251,6 +277,39 @@ namespace Tripppi.Travel.API.Services
         }
 
         #region Helper Methods
+
+        /// <summary>
+        /// Safely parses a decimal string, returning 0 if null or invalid.
+        /// </summary>
+        private static decimal ParseDecimal(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return 0m;
+            
+            return decimal.TryParse(value, out var result) ? result : 0m;
+        }
+
+        /// <summary>
+        /// Safely parses a nullable decimal string, returning null if empty or invalid.
+        /// </summary>
+        private static decimal? ParseDecimalNullable(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+            
+            return decimal.TryParse(value, out var result) ? result : null;
+        }
+
+        /// <summary>
+        /// Safely parses a DateTime string, returning DateTime.MinValue if null or invalid.
+        /// </summary>
+        private static DateTime ParseDateTime(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return DateTime.MinValue;
+            
+            return DateTime.TryParse(value, out var result) ? result : DateTime.MinValue;
+        }
 
         private static string MapCabinClass(CabinClass cabinClass) => cabinClass switch
         {
@@ -291,6 +350,9 @@ namespace Tripppi.Travel.API.Services
         /// </summary>
         private static TimeSpan ParseDuration(string duration)
         {
+            if (string.IsNullOrWhiteSpace(duration))
+                return TimeSpan.Zero;
+            
             try
             {
                 return System.Xml.XmlConvert.ToTimeSpan(duration);
@@ -310,110 +372,232 @@ namespace Tripppi.Travel.API.Services
 
         private sealed class DuffelOfferResponse
         {
+            [JsonPropertyName("data")]
             public DuffelOfferData Data { get; set; } = null!;
         }
 
         private sealed class DuffelOfferData
         {
-            public string Id { get; set; } = null!;
+            // Offer request ID (e.g., "orq_xxx") - optional as it may not be in all responses
+            [JsonPropertyName("id")]
+            public string? Id { get; set; }
+            
+            // List of offers returned from search
+            [JsonPropertyName("offers")]
             public List<DuffelOffer> Offers { get; set; } = new();
         }
 
         private sealed class DuffelOffer
         {
+            [JsonPropertyName("id")]
             public string Id { get; set; } = null!;
+            
+            [JsonPropertyName("total_amount")]
             public string TotalAmount { get; set; } = null!;
+            
+            [JsonPropertyName("total_currency")]
             public string TotalCurrency { get; set; } = null!;
+            
+            [JsonPropertyName("base_amount")]
             public string? BaseAmount { get; set; }
+            
+            [JsonPropertyName("tax_amount")]
             public string? TaxAmount { get; set; }
+            
+            [JsonPropertyName("expires_at")]
             public string ExpiresAt { get; set; } = null!;
+            
+            [JsonPropertyName("payment_requirements")]
             public DuffelPaymentRequirements? PaymentRequirements { get; set; }
+            
+            [JsonPropertyName("slices")]
             public List<DuffelSlice> Slices { get; set; } = new();
+            
+            [JsonPropertyName("passengers")]
             public List<DuffelPassenger> Passengers { get; set; } = new();
+            
+            [JsonPropertyName("conditions")]
             public DuffelConditions? Conditions { get; set; }
+            
+            [JsonPropertyName("owner")]
             public DuffelOwner Owner { get; set; } = null!;
         }
 
         private sealed class DuffelPaymentRequirements
         {
+            [JsonPropertyName("requires_instant_payment")]
             public bool RequiresInstantPayment { get; set; }
         }
 
         private sealed class DuffelSlice
         {
+            [JsonPropertyName("origin")]
             public DuffelPlace Origin { get; set; } = null!;
+            
+            [JsonPropertyName("destination")]
             public DuffelPlace Destination { get; set; } = null!;
+            
+            [JsonPropertyName("duration")]
             public string Duration { get; set; } = null!;
+            
+            [JsonPropertyName("segments")]
             public List<DuffelSegment> Segments { get; set; } = new();
         }
 
         private sealed class DuffelSegment
         {
-            public DuffelCarrier OperatingCarrier { get; set; } = null!;
-            public DuffelCarrier MarketingCarrier { get; set; } = null!;
-            public string MarketingCarrierFlightNumber { get; set; } = null!;
+            [JsonPropertyName("operating_carrier")]
+            public DuffelCarrier? OperatingCarrier { get; set; }
+            
+            [JsonPropertyName("marketing_carrier")]
+            public DuffelCarrier? MarketingCarrier { get; set; }
+            
+            [JsonPropertyName("marketing_carrier_flight_number")]
+            public string? MarketingCarrierFlightNumber { get; set; }
+            
+            [JsonPropertyName("aircraft")]
             public DuffelAircraft? Aircraft { get; set; }
-            public DuffelPlace Origin { get; set; } = null!;
-            public DuffelPlace Destination { get; set; } = null!;
-            public string DepartingAt { get; set; } = null!;
-            public string ArrivingAt { get; set; } = null!;
+            
+            [JsonPropertyName("origin")]
+            public DuffelPlace? Origin { get; set; }
+            
+            [JsonPropertyName("origin_terminal")]
+            public string? OriginTerminal { get; set; }
+            
+            [JsonPropertyName("destination")]
+            public DuffelPlace? Destination { get; set; }
+            
+            [JsonPropertyName("destination_terminal")]
+            public string? DestinationTerminal { get; set; }
+            
+            [JsonPropertyName("departing_at")]
+            public string? DepartingAt { get; set; }
+            
+            [JsonPropertyName("arriving_at")]
+            public string? ArrivingAt { get; set; }
+            
+            [JsonPropertyName("duration")]
             public string Duration { get; set; } = null!;
+            
+            [JsonPropertyName("passengers")]
+            public List<DuffelSegmentPassenger>? Passengers { get; set; }
         }
 
         private sealed class DuffelPlace
         {
+            [JsonPropertyName("iata_code")]
             public string IataCode { get; set; } = null!;
+            
+            [JsonPropertyName("name")]
             public string? Name { get; set; }
+            
+            [JsonPropertyName("city_name")]
             public string? CityName { get; set; }
+            
+            [JsonPropertyName("terminal")]
             public string? Terminal { get; set; }
         }
 
         private sealed class DuffelCarrier
         {
+            [JsonPropertyName("iata_code")]
             public string IataCode { get; set; } = null!;
+            
+            [JsonPropertyName("name")]
             public string Name { get; set; } = null!;
         }
 
         private sealed class DuffelAircraft
         {
+            [JsonPropertyName("name")]
             public string? Name { get; set; }
         }
 
         private sealed class DuffelPassenger
         {
+            [JsonPropertyName("id")]
+            public string Id { get; set; } = null!;
+            
+            [JsonPropertyName("type")]
             public string Type { get; set; } = null!;
+            
+            [JsonPropertyName("cabin_class")]
             public string? CabinClass { get; set; }
+            
+            [JsonPropertyName("cabin_class_marketing_name")]
             public string? CabinClassMarketingName { get; set; }
+            
+            [JsonPropertyName("fare_basis_code")]
             public string? FareBasisCode { get; set; }
+            
+            [JsonPropertyName("baggages")]
             public List<DuffelBaggage>? Baggages { get; set; }
         }
 
         private sealed class DuffelBaggage
         {
+            [JsonPropertyName("type")]
             public string Type { get; set; } = null!;
+            
+            [JsonPropertyName("quantity")]
             public int Quantity { get; set; }
         }
 
         private sealed class DuffelConditions
         {
+            [JsonPropertyName("change_before_departure")]
             public DuffelChangeRefundCondition? ChangeBeforeDeparture { get; set; }
+            
+            [JsonPropertyName("refund_before_departure")]
             public DuffelChangeRefundCondition? RefundBeforeDeparture { get; set; }
+            
+            [JsonPropertyName("change_after_departure")]
             public DuffelChangeRefundCondition? ChangeAfterDeparture { get; set; }
+            
+            [JsonPropertyName("refund_after_departure")]
             public DuffelChangeRefundCondition? RefundAfterDeparture { get; set; }
         }
 
         private sealed class DuffelChangeRefundCondition
         {
+            [JsonPropertyName("allowed")]
             public bool Allowed { get; set; }
+            
+            [JsonPropertyName("penalty_amount")]
             public string? PenaltyAmount { get; set; }
+            
+            [JsonPropertyName("penalty_currency")]
             public string? PenaltyCurrency { get; set; }
         }
 
         private sealed class DuffelOwner
         {
+            [JsonPropertyName("iata_code")]
             public string IataCode { get; set; } = null!;
+            
+            [JsonPropertyName("name")]
             public string Name { get; set; } = null!;
+            
+            [JsonPropertyName("logo_symbol_url")]
             public string? LogoSymbolUrl { get; set; }
+        }
+
+        private sealed class DuffelSegmentPassenger
+        {
+            [JsonPropertyName("passenger_id")]
+            public string PassengerId { get; set; } = null!;
+            
+            [JsonPropertyName("cabin_class")]
+            public string? CabinClass { get; set; }
+            
+            [JsonPropertyName("cabin_class_marketing_name")]
+            public string? CabinClassMarketingName { get; set; }
+            
+            [JsonPropertyName("fare_basis_code")]
+            public string? FareBasisCode { get; set; }
+            
+            [JsonPropertyName("baggages")]
+            public List<DuffelBaggage>? Baggages { get; set; }
         }
 
         #endregion
