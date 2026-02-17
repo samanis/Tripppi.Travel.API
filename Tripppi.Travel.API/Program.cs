@@ -3,6 +3,8 @@ using Tripppi.Travel.API.Infrastructure;
 using Tripppi.Travel.API.Repositories;
 using Tripppi.Travel.API.Services;
 using Tripppi.Travel.API.Logging;
+using Tripppi.Travel.API.appService;
+using Tripppi.Travel.API.Configuration;
 using AWS.Logger;
 using AWS.Logger.AspNetCore;
 
@@ -70,6 +72,24 @@ namespace Tripppi.Travel.API
             // Register application services
             builder.Services.AddScoped<ILocationService, LocationService>();
             
+            // Configure Duffel options from appsettings
+            builder.Services.Configure<DuffelOptions>(
+                builder.Configuration.GetSection(DuffelOptions.SectionName));
+
+            // Validate Duffel configuration on startup
+            builder.Services.AddOptions<DuffelOptions>()
+                .Bind(builder.Configuration.GetSection(DuffelOptions.SectionName))
+                .ValidateDataAnnotations()
+                .ValidateOnStart();
+
+            // Register Duffel API client (IFlightsInfo) with HttpClient factory
+            builder.Services.AddHttpClient<IFlightsInfo, DuffelApiClient>()
+                .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+                {
+                    // Allow automatic decompression for performance
+                    AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate
+                });
+            
             // Register flight search abstraction with Duffel implementation
             builder.Services.AddScoped<IFlightSearch, DuffelFlightSearch>();
 
@@ -99,7 +119,15 @@ namespace Tripppi.Travel.API
                 });
             });
 
-            builder.Services.AddControllers();
+            builder.Services.AddControllers()
+                .AddJsonOptions(options =>
+                {
+                    // Enable string enum serialization (e.g., "Adult" instead of 0)
+                    options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+                    // Use camelCase for property names (standard for JSON APIs)
+                    options.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
+                });
+            
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
